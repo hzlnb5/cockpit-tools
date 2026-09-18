@@ -53,6 +53,7 @@ jobs:
           }
           $main = Get-Content -Raw "tools/codex-webgpt-guard/build/main.go"
           if (-not $main.Contains('d.Kind != "codex-web-gpt-launcher"')) { throw "launcher descriptor hardening is missing" }
+          if (-not $main.Contains('recoverFreshCodexLaunch(beforeConnect.ModTime)')) { throw "disconnected-route launch-race recovery is missing" }
 
       - name: Test
         working-directory: tools/codex-webgpt-guard/build
