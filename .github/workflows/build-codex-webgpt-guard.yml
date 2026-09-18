@@ -40,20 +40,40 @@ jobs:
       - name: Apply audited hardening
         shell: bash
         run: |
+          set -euo pipefail
           tr -d '\r' < tools/codex-webgpt-guard/hardening-v2.patch > "$RUNNER_TEMP/hardening-v2.patch"
           git apply --whitespace=nowarn --directory=tools/codex-webgpt-guard/build -p2 "$RUNNER_TEMP/hardening-v2.patch"
+          tr -d '\r' < tools/codex-webgpt-guard/hardening-v4.patch > "$RUNNER_TEMP/hardening-v4.patch"
+          git apply --whitespace=nowarn --directory=tools/codex-webgpt-guard/build -p2 "$RUNNER_TEMP/hardening-v4.patch"
 
-      - name: Verify hardening landed in build source
+      - name: Verify final safety invariants
         shell: pwsh
         run: |
-          $src = Get-Content -Raw "tools/codex-webgpt-guard/build/platform_windows.go"
-          if (-not $src.Contains("freshCodexRecoveryScript")) { throw "hardening patch did not reach build source" }
-          if ($src.Contains("Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | Stop-Process -Force")) {
-            throw "unsafe broad process termination is still present"
-          }
+          $win = Get-Content -Raw "tools/codex-webgpt-guard/build/platform_windows.go"
           $main = Get-Content -Raw "tools/codex-webgpt-guard/build/main.go"
-          if (-not $main.Contains('d.Kind != "codex-web-gpt-launcher"')) { throw "launcher descriptor hardening is missing" }
-          if (-not $main.Contains('recoverFreshCodexLaunch(beforeConnect.ModTime)')) { throw "disconnected-route launch-race recovery is missing" }
+          if (-not $win.Contains("freshCodexRecoveryScript")) { throw "launch-race recovery guard is missing" }
+          if ($win.Contains("Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | Stop-Process")) { throw "unsafe broad process termination is present" }
+          if ($win.Contains("ProcessName -eq 'Codex'")) { throw "process-name fallback must fail closed" }
+          if ($win.Contains("Name -like 'Codex*'") -or $win.Contains("Name -like 'ChatGPT*'")) { throw "StartApps display-name fallback must fail closed" }
+          if (-not $win.Contains("families.Count -ne 1")) { throw "ambiguous launch-family fail-closed guard is missing" }
+          $entryCheck = $win.IndexOf("matches.Count -ne 1")
+          $stop = $win.IndexOf("Stop-Process -Id")
+          if ($entryCheck -lt 0 -or $stop -lt 0 -or $entryCheck -gt $stop) { throw "restart target is not proven before process termination" }
+          if (-not $main.Contains('d.Kind != "codex-web-gpt-launcher"')) { throw "exact launcher kind validation is missing" }
+          if (-not $main.Contains('strings.TrimSpace(d.Endpoint) == ""')) { throw "empty endpoint fail-closed check is missing" }
+          if (-not $main.Contains('context.WithTimeout(context.Background(), 20*time.Second)')) { throw "route lifecycle timeout is missing" }
+          if (-not $main.Contains("CheckRedirect")) { throw "health redirect guard is missing" }
+          if (-not $main.Contains("guard startup cancelled by stop request")) { throw "self-update stop-marker race guard is missing" }
+
+      - name: Format check
+        shell: pwsh
+        working-directory: tools/codex-webgpt-guard/build
+        run: |
+          $unformatted = gofmt -l .
+          if ($unformatted) {
+            $unformatted
+            throw "Guard source is not gofmt-clean"
+          }
 
       - name: Test
         working-directory: tools/codex-webgpt-guard/build
@@ -88,6 +108,12 @@ jobs:
           @echo off
           cd /d "%~dp0"
           codex-webgpt-guard.exe status
+          if errorlevel 1 (
+            echo.
+            echo Status check failed. See the error above.
+            pause
+            exit /b 1
+          )
           pause
           "@ | Set-Content -Encoding ascii dist/STATUS.cmd
           @"
@@ -105,12 +131,58 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 dist/codex-webgpt-guard.exe).Hash.ToLowerInvariant()
           "$hash  codex-webgpt-guard.exe" | Set-Content -Encoding ascii dist/SHA256SUMS.txt
 
-      - name: Smoke test binary
+      - name: Binary smoke test
         working-directory: tools/codex-webgpt-guard/build
         shell: pwsh
         run: |
           .\dist\codex-webgpt-guard.exe help
+          if ($LASTEXITCODE -ne 0) { throw "help smoke test failed" }
           .\dist\codex-webgpt-guard.exe status
+          if ($LASTEXITCODE -ne 0) { throw "status smoke test failed" }
+
+      - name: Install, self-update, and uninstall smoke test
+        working-directory: tools/codex-webgpt-guard/build
+        shell: pwsh
+        run: |
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP "GuardLocal"
+          $env:CODEX_CHATGPT_WEB_HOME = Join-Path $env:RUNNER_TEMP "GuardWebHome"
+          $env:CODEX_HOME = Join-Path $env:RUNNER_TEMP "GuardCodexHome"
+          Remove-Item -Recurse -Force $env:LOCALAPPDATA,$env:CODEX_CHATGPT_WEB_HOME,$env:CODEX_HOME -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $env:LOCALAPPDATA,$env:CODEX_CHATGPT_WEB_HOME,$env:CODEX_HOME | Out-Null
+
+          $exe = (Resolve-Path ".\dist\codex-webgpt-guard.exe").Path
+          & $exe install
+          if ($LASTEXITCODE -ne 0) { throw "first install failed" }
+
+          $installed = Join-Path $env:LOCALAPPDATA "CodexWebGPTGuard\codex-webgpt-guard.exe"
+          if (-not (Test-Path $installed)) { throw "installed executable is missing" }
+
+          $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+          $runValue = (Get-ItemProperty -Path $runKey -Name CodexWebGPTGuard -ErrorAction Stop).CodexWebGPTGuard
+          if (-not $runValue -or -not $runValue.Contains("codex-webgpt-guard.exe")) { throw "HKCU startup registration is missing" }
+
+          Start-Sleep -Milliseconds 600
+          & $exe install
+          if ($LASTEXITCODE -ne 0) { throw "second install/self-update path failed" }
+
+          & $exe status
+          if ($LASTEXITCODE -ne 0) { throw "status failed after self-update" }
+
+          & $exe uninstall
+          if ($LASTEXITCODE -ne 0) { throw "uninstall failed" }
+
+          $runValueAfter = (Get-ItemProperty -Path $runKey -Name CodexWebGPTGuard -ErrorAction SilentlyContinue).CodexWebGPTGuard
+          if ($runValueAfter) { throw "HKCU startup registration remained after uninstall" }
+
+          $deadline = (Get-Date).AddSeconds(6)
+          do {
+            $alive = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+              $_.ExecutablePath -and $_.ExecutablePath.Equals($installed, [System.StringComparison]::OrdinalIgnoreCase)
+            })
+            if ($alive.Count -eq 0) { break }
+            Start-Sleep -Milliseconds 200
+          } while ((Get-Date) -lt $deadline)
+          if ($alive.Count -ne 0) { throw "background Guard process did not exit after uninstall" }
 
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
