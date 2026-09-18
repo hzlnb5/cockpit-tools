@@ -1,0 +1,22 @@
+name: Sync upstream Cockpit
+
+on:
+  schedule:
+    - cron: "37 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.repository == 'hzlnb5/cockpit-tools'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync fork main from upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api             --method POST             -H "Accept: application/vnd.github+json"             "/repos/${GITHUB_REPOSITORY}/merge-upstream"             -f branch=main
