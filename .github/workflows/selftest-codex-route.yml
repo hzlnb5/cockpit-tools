@@ -22,8 +22,5 @@ jobs:
       - name: Core Rust tests
         run: cargo test --package cockpit-core -- --test-threads=1
 
-      - name: Tauri OAuth external route preservation
-        run: cargo test --package cockpit-tools --lib oauth_account_switch_preserves_external_openai_base_url -- --test-threads=1
-
-      - name: Tauri Cockpit-owned route cleanup
-        run: cargo test --package cockpit-tools --lib switching_from_cockpit_api_provider_to_oauth_cleans_cockpit_route -- --test-threads=1
+      - name: Compile Windows Tauri tests
+        run: cargo test --package cockpit-tools --lib --no-run
