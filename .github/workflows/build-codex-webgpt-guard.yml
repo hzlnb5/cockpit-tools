@@ -1,0 +1,91 @@
+name: Build Codex WebGPT Guard
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "tools/codex-webgpt-guard/**"
+      - ".github/workflows/build-codex-webgpt-guard.yml"
+  push:
+    branches: [main]
+    paths:
+      - "tools/codex-webgpt-guard/**"
+      - ".github/workflows/build-codex-webgpt-guard.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Go setup
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: false
+
+      - name: Extract source
+        shell: pwsh
+        run: |
+          $build = "tools/codex-webgpt-guard/build"
+          Remove-Item -Recurse -Force $build -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $build | Out-Null
+          Expand-Archive -Path "tools/codex-webgpt-guard/source.zip" -DestinationPath $build -Force
+
+      - name: Test
+        working-directory: tools/codex-webgpt-guard/build
+        run: go test ./...
+
+      - name: Vet
+        working-directory: tools/codex-webgpt-guard/build
+        run: go vet ./...
+
+      - name: Build
+        working-directory: tools/codex-webgpt-guard/build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          go build -trimpath -ldflags="-s -w" -o dist/codex-webgpt-guard.exe .
+          Copy-Item README.md dist/README.md
+          @"
+          @echo off
+          cd /d "%~dp0"
+          codex-webgpt-guard.exe install
+          echo.
+          echo Installation finished. You can keep using Cockpit normally.
+          pause
+          "@ | Set-Content -Encoding ascii dist/INSTALL.cmd
+          @"
+          @echo off
+          cd /d "%~dp0"
+          codex-webgpt-guard.exe status
+          pause
+          "@ | Set-Content -Encoding ascii dist/STATUS.cmd
+          @"
+          @echo off
+          cd /d "%~dp0"
+          codex-webgpt-guard.exe uninstall
+          pause
+          "@ | Set-Content -Encoding ascii dist/UNINSTALL.cmd
+          $hash = (Get-FileHash -Algorithm SHA256 dist/codex-webgpt-guard.exe).Hash.ToLowerInvariant()
+          "$hash  codex-webgpt-guard.exe" | Set-Content -Encoding ascii dist/SHA256SUMS.txt
+
+      - name: Smoke test binary
+        working-directory: tools/codex-webgpt-guard/build
+        shell: pwsh
+        run: |
+          .\dist\codex-webgpt-guard.exe help
+          .\dist\codex-webgpt-guard.exe status
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-webgpt-guard-windows-x64
+          retention-days: 30
+          if-no-files-found: error
+          path: tools/codex-webgpt-guard/build/dist/**
