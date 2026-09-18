@@ -64,6 +64,7 @@ jobs:
           if (-not $main.Contains('context.WithTimeout(context.Background(), 20*time.Second)')) { throw "route lifecycle timeout is missing" }
           if (-not $main.Contains("CheckRedirect")) { throw "health redirect guard is missing" }
           if (-not $main.Contains("guard startup cancelled by stop request")) { throw "self-update stop-marker race guard is missing" }
+          if (-not $main.Contains("recoverFreshCodexLaunch(beforeConnect.ModTime)")) { throw "disconnected-route launch-race recovery is missing" }
 
       - name: Format check
         shell: pwsh
