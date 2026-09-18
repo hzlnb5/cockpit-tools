@@ -37,16 +37,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $build | Out-Null
           Expand-Archive -Path "tools/codex-webgpt-guard/source.zip" -DestinationPath $build -Force
 
-      - name: Apply audited hardening
-        shell: bash
-        run: |
-          set -euo pipefail
-          tr -d '\r' < tools/codex-webgpt-guard/hardening-v2.patch > "$RUNNER_TEMP/hardening-v2.patch"
-          git apply --whitespace=nowarn --directory=tools/codex-webgpt-guard/build -p2 "$RUNNER_TEMP/hardening-v2.patch"
-          tr -d '\r' < tools/codex-webgpt-guard/hardening-v4.patch > "$RUNNER_TEMP/hardening-v4.patch"
-          git apply --whitespace=nowarn --directory=tools/codex-webgpt-guard/build -p2 "$RUNNER_TEMP/hardening-v4.patch"
-
-      - name: Verify final safety invariants
+      - name: Verify canonical source safety invariants
         shell: pwsh
         run: |
           $win = Get-Content -Raw "tools/codex-webgpt-guard/build/platform_windows.go"
