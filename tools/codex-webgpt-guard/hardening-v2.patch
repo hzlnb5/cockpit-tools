@@ -80,7 +80,15 @@ diff --git a/old/platform_windows.go b/source/platform_windows.go
 index 7812673..5cff9bf 100644
 --- a/old/platform_windows.go
 +++ b/source/platform_windows.go
-@@ -134,11 +134,53 @@ func regDeleteRun(name string) error {
+@@ -3,6 +3,7 @@
+ package main
+ 
+ import (
++	"context"
+ 	"fmt"
+ 	"os"
+ 	"os/exec"
+@@ -134,11 +135,55 @@ func regDeleteRun(name string) error {
  	return nil
  }
  
@@ -113,8 +121,6 @@ index 7812673..5cff9bf 100644
 +$family=$anchor.Family
 +$targets=@($fresh | Where-Object { $_.Family -eq $family })
 +if($targets.Count -eq 0){ exit 6 }
-+$targets | ForEach-Object { Stop-Process -Id $_.Process.Id -Force -ErrorAction SilentlyContinue }
-+Start-Sleep -Milliseconds 250
 +$entries=Get-StartApps
 +if($family -eq 'codex') {
 +  $entry=$entries | Where-Object { $_.AppID -like 'OpenAI.Codex_*' -or $_.Name -like 'Codex*' } | Select-Object -First 1
@@ -122,6 +128,8 @@ index 7812673..5cff9bf 100644
 +  $entry=$entries | Where-Object { $_.AppID -like 'OpenAI.ChatGPT*' -or $_.Name -like 'ChatGPT*' } | Select-Object -First 1
 +}
 +if(-not $entry){ exit 5 }
++$targets | ForEach-Object { Stop-Process -Id $_.Process.Id -Force -ErrorAction SilentlyContinue }
++Start-Sleep -Milliseconds 250
 +Start-Process -FilePath ('shell:AppsFolder\\'+$entry.AppID) -ErrorAction Stop | Out-Null
 +exit 0`, writeMs)
 +}
@@ -158,7 +166,9 @@ index 7812673..5cff9bf 100644
 -Start-Process -FilePath ('shell:AppsFolder\\'+$entry.AppID) -ErrorAction Stop | Out-Null
 -exit 0`
 -	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script)
-+	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", freshCodexRecoveryScript(configWriteUnixNano))
++	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
++	defer cancel()
++	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", freshCodexRecoveryScript(configWriteUnixNano))
  	prepareHiddenCommand(cmd)
  	return cmd.Run() == nil
  }
