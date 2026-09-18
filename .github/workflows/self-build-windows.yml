@@ -38,6 +38,15 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Verify external route is preserved
+        run: cargo test --package cockpit-core oauth_account_switch_preserves_external_openai_base_url -- --test-threads=1
+
+      - name: Verify Cockpit-owned route cleanup
+        run: cargo test --package cockpit-core switching_from_cockpit_api_route_to_oauth_cleans_cockpit_route -- --test-threads=1
+
+      - name: Check Windows Tauri library
+        run: cargo check --package cockpit-tools --lib
+
       - name: Build unsigned Windows app
         shell: bash
         env:
