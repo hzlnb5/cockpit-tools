@@ -14,7 +14,7 @@ Default mode is `auto`:
 - When Web GPT comes back, it uses the official **`route connect` lifecycle** to reconnect it.
 - It removes only known Cockpit-managed model catalog references when Web mode is active and those references would replace the Web GPT model catalog.
 - It refuses to overwrite an unknown custom provider, unknown model catalog, or another custom `openai_base_url`.
-- Its launch-race fallback only reloads a freshly-started matching ChatGPT/Codex package family; it never intentionally terminates an older session.
+- Its launch-race fallback only reloads a freshly-started matching ChatGPT/Codex package family; it never intentionally terminates an older session, and it resolves the matching packaged-app restart target before stopping anything.
 
 So your normal workflow is simply:
 
@@ -70,7 +70,7 @@ This removes autostart and asks the background Guard to exit. It intentionally l
 
 ## Safety / ownership rules
 
-The Guard only accepts a Web GPT route from the codex-chatgpt-web journal when it is an HTTP loopback `/v1` endpoint (`127.0.0.1`, `localhost`, or `::1`).
+The Guard only accepts a Web GPT route from an active/inactive codex-chatgpt-web journal when it is an HTTP loopback `/v1` endpoint (`127.0.0.1`, `localhost`, or `::1`).
 
 It will not silently take over:
 
@@ -83,7 +83,6 @@ Logs are written to:
 ```text
 %LOCALAPPDATA%\CodexWebGPTGuard\guard.log
 ```
-
 
 ## Windows trust notice
 

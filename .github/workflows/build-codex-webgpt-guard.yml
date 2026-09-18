@@ -29,7 +29,7 @@ jobs:
           go-version: "1.23.x"
           cache: false
 
-      - name: Extract source
+      - name: Extract audited source
         shell: pwsh
         run: |
           $build = "tools/codex-webgpt-guard/build"
@@ -37,22 +37,31 @@ jobs:
           New-Item -ItemType Directory -Force -Path $build | Out-Null
           Expand-Archive -Path "tools/codex-webgpt-guard/source.zip" -DestinationPath $build -Force
 
-      - name: Apply audited hardening
-        shell: bash
-        run: |
-          tr -d '\r' < tools/codex-webgpt-guard/hardening-v2.patch > "$RUNNER_TEMP/hardening-v2.patch"
-          git apply --whitespace=nowarn --directory=tools/codex-webgpt-guard/build -p2 "$RUNNER_TEMP/hardening-v2.patch"
-
-      - name: Verify hardening landed in build source
+      - name: Verify audited hardening is present
         shell: pwsh
         run: |
-          $src = Get-Content -Raw "tools/codex-webgpt-guard/build/platform_windows.go"
-          if (-not $src.Contains("freshCodexRecoveryScript")) { throw "hardening patch did not reach build source" }
-          if ($src.Contains("Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | Stop-Process -Force")) {
-            throw "unsafe broad process termination is still present"
+          $win = Get-Content -Raw "tools/codex-webgpt-guard/build/platform_windows.go"
+          if (-not $win.Contains("freshCodexRecoveryScript")) { throw "launch-race hardening is missing" }
+          if ($win.Contains("Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | Stop-Process")) {
+            throw "unsafe broad process termination is present"
+          }
+          $entryCheck = $win.IndexOf('if(-not $entry){ exit 5 }')
+          $stop = $win.IndexOf('Stop-Process -Id $_.Process.Id')
+          if ($entryCheck -lt 0 -or $stop -lt 0 -or $entryCheck -gt $stop) {
+            throw "restart target must be resolved before the fresh process is terminated"
           }
           $main = Get-Content -Raw "tools/codex-webgpt-guard/build/main.go"
           if (-not $main.Contains('d.Kind != "codex-web-gpt-launcher"')) { throw "launcher descriptor hardening is missing" }
+
+      - name: Format check
+        working-directory: tools/codex-webgpt-guard/build
+        shell: pwsh
+        run: |
+          $unformatted = gofmt -l .
+          if ($unformatted) {
+            $unformatted
+            throw "Guard source is not gofmt-clean"
+          }
 
       - name: Test
         working-directory: tools/codex-webgpt-guard/build
