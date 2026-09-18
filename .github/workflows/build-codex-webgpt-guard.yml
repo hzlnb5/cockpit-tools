@@ -39,7 +39,9 @@ jobs:
 
       - name: Apply audited hardening
         shell: bash
-        run: git apply --directory=tools/codex-webgpt-guard/build -p2 tools/codex-webgpt-guard/hardening-v2.patch
+        run: |
+          tr -d '\r' < tools/codex-webgpt-guard/hardening-v2.patch > "$RUNNER_TEMP/hardening-v2.patch"
+          git apply --whitespace=nowarn --directory=tools/codex-webgpt-guard/build -p2 "$RUNNER_TEMP/hardening-v2.patch"
 
       - name: Verify hardening landed in build source
         shell: pwsh
