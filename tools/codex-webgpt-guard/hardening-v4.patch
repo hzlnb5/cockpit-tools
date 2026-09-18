@@ -1,0 +1,285 @@
+diff --git a/old/README.md b/source/README.md
+index 7846e46..02da4d9 100644
+--- a/old/README.md
++++ b/source/README.md
+@@ -9,12 +9,15 @@ It does **not** patch Cockpit, Codex, or codex-chatgpt-web binaries. It is desig
+ Default mode is `auto`:
+ 
+ - If the Web GPT launcher/runtime is live, it keeps the codex-chatgpt-web route connected.
+-- If Cockpit switches a normal OAuth account and rewrites `config.toml`, it restores only the Web GPT loopback route that is recorded in codex-chatgpt-web's own integration journal.
+-- If Web GPT is closed for a short grace period, it uses codex-chatgpt-web's **official `route disconnect` lifecycle** to restore native Codex routing and keep the Web GPT journal internally consistent.
+-- When Web GPT comes back, it uses the official **`route connect` lifecycle** to reconnect it.
+-- It removes only known Cockpit-managed model catalog references when Web mode is active and those references would replace the Web GPT model catalog.
++- If Cockpit switches a normal OAuth account and rewrites `config.toml`, it restores only the Web GPT loopback route recorded in codex-chatgpt-web's own integration journal.
++- If Web GPT is closed for a short grace period, it uses codex-chatgpt-web's official `route disconnect` lifecycle to restore native Codex routing and keep the journal consistent.
++- When Web GPT comes back, it uses the official `route connect` lifecycle to reconnect it.
++- It removes only known Cockpit-managed model catalog references when Web mode is active.
+ - It refuses to overwrite an unknown custom provider, unknown model catalog, or another custom `openai_base_url`.
+-- Its launch-race fallback only reloads a freshly-started matching ChatGPT/Codex package family; it never intentionally terminates an older session.
++- Its launch-race fallback is fail-closed: it reloads only a freshly-started, package-identified, unambiguous ChatGPT/Codex family, and resolves exactly one packaged-app restart target before stopping anything.
++- Existing long-running ChatGPT/Codex sessions are not intentionally terminated.
++- Launcher descriptors must identify `codex-web-gpt-launcher` and expose a live HTTP loopback endpoint.
++- Web GPT route lifecycle commands have a 20-second timeout, and health probes do not follow redirects.
+ 
+ So your normal workflow is simply:
+ 
+@@ -39,7 +42,9 @@ It copies itself to:
+ %LOCALAPPDATA%\CodexWebGPTGuard\codex-webgpt-guard.exe
+ ```
+ 
+-and registers a **current-user** startup entry. No administrator rights are required.
++and registers a current-user startup entry. No administrator rights are required.
++
++Installing a newer Guard over an existing installation is supported: the installer signals the old background Guard to stop, waits for the Windows executable lock to clear, replaces the binary, and starts the new Guard.
+ 
+ ## Status / modes
+ 
+@@ -70,7 +75,7 @@ This removes autostart and asks the background Guard to exit. It intentionally l
+ 
+ ## Safety / ownership rules
+ 
+-The Guard only accepts a Web GPT route from an active/inactive codex-chatgpt-web journal when it is an HTTP loopback `/v1` endpoint (`127.0.0.1`, `localhost`, or `::1`).
++The Guard only accepts a Web GPT route from a codex-chatgpt-web journal when it is an HTTP loopback `/v1` endpoint (`127.0.0.1`, `localhost`, or `::1`).
+ 
+ It will not silently take over:
+ 
+@@ -84,7 +89,10 @@ Logs are written to:
+ %LOCALAPPDATA%\CodexWebGPTGuard\guard.log
+ ```
+ 
+-
+ ## Windows trust notice
+ 
+ The CI-built executable is reproducible from the source in this repository but is **not Authenticode-signed**. Windows SmartScreen may therefore show an Unknown publisher warning. The package includes `SHA256SUMS.txt` so the binary can be verified before installation.
++
++## Build provenance
++
++CI extracts the checked-in `source.zip`, applies the checked-in hardening patches, then runs formatting, tests, vet, Windows build and installation lifecycle checks on that exact resulting source tree. The packaged executable therefore comes from the same source revision that passed CI.
+diff --git a/old/main.go b/source/main.go
+index cf02802..e17057c 100644
+--- a/old/main.go
++++ b/source/main.go
+@@ -1,6 +1,7 @@
+ package main
+ 
+ import (
++	"context"
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
+@@ -309,7 +310,13 @@ func runDaemon() error {
+ 		return nil
+ 	}
+ 	defer release()
+-	_ = os.Remove(stopPath())
++	// A stop marker may have been written by a concurrent installer before this daemon
++	// finished starting. Never clear it here: doing so can strand the just-started
++	// process and keep the installed executable locked during a self-update.
++	if fileExists(stopPath()) {
++		logLine("guard startup cancelled by stop request")
++		return nil
++	}
+ 
+ 	var state webState
+ 	var lastSig fileSignature
+@@ -583,7 +590,9 @@ func routeAction(state webState, action string) error {
+ 	}
+ 	args := append([]string{}, cfg.RuntimeCommand[1:]...)
+ 	args = append(args, "route", action)
+-	cmd := exec.Command(cfg.RuntimeCommand[0], args...)
++	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
++	defer cancel()
++	cmd := exec.CommandContext(ctx, cfg.RuntimeCommand[0], args...)
+ 	prepareHiddenCommand(cmd)
+ 	cmd.Env = append(os.Environ(), "CODEX_CHATGPT_WEB_HOME="+webGPTHome())
+ 	if state.Journal != nil && strings.TrimSpace(state.Journal.ConfigPath) != "" {
+@@ -591,6 +600,9 @@ func routeAction(state webState, action string) error {
+ 	}
+ 	out, err := cmd.CombinedOutput()
+ 	if err != nil {
++		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
++			return fmt.Errorf("Web GPT route %s timed out after 20s", action)
++		}
+ 		return fmt.Errorf("Web GPT route %s failed: %w: %s", action, err, strings.TrimSpace(string(out)))
+ 	}
+ 	var result struct {
+@@ -625,7 +637,12 @@ func routeHealthy(route string) bool {
+ 		return false
+ 	}
+ 	root := strings.TrimSuffix(strings.TrimRight(route, "/"), "/v1")
+-	client := &http.Client{Timeout: 220 * time.Millisecond}
++	client := &http.Client{
++		Timeout: 220 * time.Millisecond,
++		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
++			return http.ErrUseLastResponse
++		},
++	}
+ 	resp, err := client.Get(root + "/healthz")
+ 	if err != nil {
+ 		return false
+@@ -648,7 +665,7 @@ func launcherLive(path string) bool {
+ 		return false
+ 	}
+ 	if strings.TrimSpace(d.Endpoint) == "" {
+-		return true
++		return false
+ 	}
+ 	u, err := url.Parse(d.Endpoint)
+ 	if err != nil || u.Scheme != "http" || u.Port() == "" {
+diff --git a/old/main_test.go b/source/main_test.go
+index d0f78cb..b8c09c2 100644
+--- a/old/main_test.go
++++ b/source/main_test.go
+@@ -377,3 +377,34 @@ func TestLauncherDescriptorRejectsWrongKindWithoutDialing(t *testing.T) {
+ 		t.Fatal("foreign launcher descriptor must not be accepted")
+ 	}
+ }
++
++func TestLauncherDescriptorRejectsEmptyEndpoint(t *testing.T) {
++	root := t.TempDir()
++	path := filepath.Join(root, "launcher-browser.json")
++	d := launcherDescriptor{Version: 3, Kind: "codex-web-gpt-launcher", PID: os.Getpid()}
++	b, _ := json.Marshal(d)
++	if err := os.WriteFile(path, b, 0600); err != nil {
++		t.Fatal(err)
++	}
++	if launcherLive(path) {
++		t.Fatal("launcher descriptor without a loopback endpoint must fail closed")
++	}
++}
++
++func TestRouteHealthyRejectsRedirect(t *testing.T) {
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path == "/healthz" {
++			http.Redirect(w, r, "/ok", http.StatusFound)
++			return
++		}
++		if r.URL.Path == "/ok" {
++			w.WriteHeader(http.StatusOK)
++			return
++		}
++		http.NotFound(w, r)
++	}))
++	defer server.Close()
++	if routeHealthy(server.URL + "/v1") {
++		t.Fatal("health probe must not follow redirects")
++	}
++}
+diff --git a/old/platform_windows.go b/source/platform_windows.go
+index 5cff9bf..a4c6b1c 100644
+--- a/old/platform_windows.go
++++ b/source/platform_windows.go
+@@ -3,6 +3,7 @@
+ package main
+ 
+ import (
++	"context"
+ 	"fmt"
+ 	"os"
+ 	"os/exec"
+@@ -147,7 +148,6 @@ function Get-Family($p) {
+   }
+   if($path -match '\\OpenAI\.Codex_'){ return 'codex' }
+   if($path -match '\\OpenAI\.ChatGPT_'){ return 'chatgpt' }
+-  if($p.ProcessName -eq 'Codex'){ return 'codex' }
+   return $null
+ }
+ $fresh=@(Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | ForEach-Object {
+@@ -159,19 +159,23 @@ $fresh=@(Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | ForEach-Objec
+   } catch {}
+ } | Where-Object { $_.Family })
+ if($fresh.Count -eq 0){ exit 3 }
+-$anchor=$fresh | Sort-Object @{Expression={[math]::Abs($_.StartMs-$writeMs)}} | Select-Object -First 1
+-$family=$anchor.Family
++$families=@($fresh | Select-Object -ExpandProperty Family -Unique)
++if($families.Count -ne 1){ exit 7 }
++$family=$families[0]
+ $targets=@($fresh | Where-Object { $_.Family -eq $family })
+ if($targets.Count -eq 0){ exit 6 }
+-$targets | ForEach-Object { Stop-Process -Id $_.Process.Id -Force -ErrorAction SilentlyContinue }
+-Start-Sleep -Milliseconds 250
++# Resolve one matching packaged-app restart target before terminating anything. If Windows
++# cannot prove package identity, or if multiple package identities match, fail closed.
+ $entries=Get-StartApps
+ if($family -eq 'codex') {
+-  $entry=$entries | Where-Object { $_.AppID -like 'OpenAI.Codex_*' -or $_.Name -like 'Codex*' } | Select-Object -First 1
++  $matches=@($entries | Where-Object { $_.AppID -like 'OpenAI.Codex_*' })
+ } else {
+-  $entry=$entries | Where-Object { $_.AppID -like 'OpenAI.ChatGPT*' -or $_.Name -like 'ChatGPT*' } | Select-Object -First 1
++  $matches=@($entries | Where-Object { $_.AppID -like 'OpenAI.ChatGPT*' })
+ }
+-if(-not $entry){ exit 5 }
++if($matches.Count -ne 1){ exit 5 }
++$entry=$matches[0]
++$targets | ForEach-Object { Stop-Process -Id $_.Process.Id -Force -ErrorAction SilentlyContinue }
++Start-Sleep -Milliseconds 250
+ Start-Process -FilePath ('shell:AppsFolder\\'+$entry.AppID) -ErrorAction Stop | Out-Null
+ exit 0`, writeMs)
+ }
+@@ -188,7 +192,9 @@ func recoverFreshCodexLaunch(configWriteUnixNano int64) bool {
+ 	if age < 0 || age > 5*time.Second {
+ 		return false
+ 	}
+-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", freshCodexRecoveryScript(configWriteUnixNano))
++	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
++	defer cancel()
++	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", freshCodexRecoveryScript(configWriteUnixNano))
+ 	prepareHiddenCommand(cmd)
+ 	return cmd.Run() == nil
+ }
+diff --git a/old/platform_windows_test.go b/source/platform_windows_test.go
+index 70558db..0ac23f7 100644
+--- a/old/platform_windows_test.go
++++ b/source/platform_windows_test.go
+@@ -30,6 +30,23 @@ func TestFreshRecoveryScriptOnlyStopsFreshMatchingFamily(t *testing.T) {
+ 	if strings.Contains(script, "Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | Stop-Process") {
+ 		t.Fatal("recovery script must never terminate every ChatGPT/Codex process")
+ 	}
++	for _, forbidden := range []string{
++		"if($p.ProcessName -eq 'Codex')",
++		"Name -like 'Codex*'",
++		"Name -like 'ChatGPT*'",
++	} {
++		if strings.Contains(script, forbidden) {
++			t.Fatalf("recovery script must fail closed instead of using fallback %q", forbidden)
++		}
++	}
++	if !strings.Contains(script, "$families.Count -ne 1") {
++		t.Fatal("recovery script must fail closed when multiple app families are fresh")
++	}
++	entryCheck := strings.Index(script, "if($matches.Count -ne 1){ exit 5 }")
++	stop := strings.Index(script, "Stop-Process -Id $_.Process.Id")
++	if entryCheck < 0 || stop < 0 || entryCheck > stop {
++		t.Fatal("recovery must resolve exactly one restart target before terminating the fresh process")
++	}
+ }
+ 
+ func TestDaemonRepairsCockpitRewriteWhileWebGPTIsLive(t *testing.T) {
+@@ -102,3 +119,27 @@ func TestDaemonRepairsCockpitRewriteWhileWebGPTIsLive(t *testing.T) {
+ 	b, _ := os.ReadFile(configPath)
+ 	t.Fatalf("daemon did not repair Cockpit rewrite in time:\n%s", string(b))
+ }
++
++func TestDaemonHonorsStopMarkerPresentAtStartup(t *testing.T) {
++	root := t.TempDir()
++	t.Setenv("LOCALAPPDATA", filepath.Join(root, "local"))
++	if err := os.MkdirAll(filepath.Dir(stopPath()), 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(stopPath(), []byte("stop"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	done := make(chan error, 1)
++	go func() { done <- runDaemon() }()
++	select {
++	case err := <-done:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(2 * time.Second):
++		t.Fatal("daemon ignored stop marker present during startup")
++	}
++	if _, err := os.Stat(stopPath()); err != nil {
++		t.Fatalf("daemon must not delete installer stop marker: %v", err)
++	}
++}
