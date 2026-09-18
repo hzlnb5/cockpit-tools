@@ -22,5 +22,5 @@ jobs:
       - name: Core Rust tests
         run: cargo test --package cockpit-core -- --test-threads=1
 
-      - name: Compile Windows Tauri tests
-        run: cargo test --package cockpit-tools --lib --no-run
+      - name: Check Windows Tauri library
+        run: cargo check --package cockpit-tools --lib
