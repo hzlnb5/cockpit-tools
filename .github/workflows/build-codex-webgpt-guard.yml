@@ -29,13 +29,64 @@ jobs:
           go-version: "1.23.x"
           cache: false
 
-      - name: Extract source
+      - name: Reconstruct and verify exact Guard source
         shell: pwsh
         run: |
-          $build = "tools/codex-webgpt-guard/build"
+          $root = "tools/codex-webgpt-guard"
+          $build = "$root/build"
           Remove-Item -Recurse -Force $build -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $build | Out-Null
-          Expand-Archive -Path "tools/codex-webgpt-guard/source.zip" -DestinationPath $build -Force
+
+          $manifest = @(
+            "source.b64.00.0",
+            "source.b64.00.1",
+            "source.b64.00.2.0",
+            "source.b64.00.2.1.0",
+            "source.b64.00.2.1.1",
+            "source.b64.00.2.1.2",
+            "source.b64.00.2.1.3",
+            "source.b64.00.2.1.4",
+            "source.b64.00.2.2",
+            "source.b64.00.2.3",
+            "source.b64.01",
+            "source.b64.02",
+            "source.b64.03",
+            "source.b64.04.0.0",
+            "source.b64.04.0.1",
+            "source.b64.04.0.2",
+            "source.b64.04.0.3",
+            "source.b64.04.1",
+            "source.b64.04.2",
+            "source.b64.05",
+            "source.b64.06",
+            "source.b64.07",
+            "source.b64.08",
+            "source.b64.09.0",
+            "source.b64.09.1",
+            "source.b64.09.2.0.0",
+            "source.b64.09.2.0.1",
+            "source.b64.09.2.0.2",
+            "source.b64.09.2.0.3",
+            "source.b64.09.2.0.4",
+            "source.b64.09.2.1",
+            "source.b64.09.2.2",
+            "source.b64.09.2.3",
+            "source.b64.10"
+          )
+          $b64 = ($manifest | ForEach-Object {
+            $p = Join-Path $root $_
+            if (-not (Test-Path -LiteralPath $p)) { throw "Missing Guard source chunk: $p" }
+            (Get-Content -Raw -LiteralPath $p).Trim()
+          }) -join ""
+
+          $zip = [Convert]::FromBase64String($b64)
+          $archive = "$root/source-ci.zip"
+          [IO.File]::WriteAllBytes($archive, $zip)
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = "b91fdbd136ee7644d6afb6c703b4f48558cc0048ca59c28a6ae9791cbc05a150"
+          if ($hash -ne $expected) { throw "Guard source archive hash mismatch: $hash" }
+
+          Expand-Archive -LiteralPath $archive -DestinationPath $build -Force
 
       - name: Test
         working-directory: tools/codex-webgpt-guard/build
