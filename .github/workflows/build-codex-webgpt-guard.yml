@@ -46,15 +46,15 @@ jobs:
           if ($win.Contains("Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | Stop-Process -Force")) {
             throw "unsafe broad process termination is present"
           }
-          if ($win.Contains("if($p.ProcessName -eq 'Codex')")) { throw "process-name fallback must fail closed" }
-          if ($win.Contains("Name -like 'Codex*'") -or $win.Contains("Name -like 'ChatGPT*'")) {
+          if ($win.Contains('if($p.ProcessName -eq ''Codex'')')) { throw "process-name fallback must fail closed" }
+          if ($win.Contains('Name -like ''Codex*''') -or $win.Contains('Name -like ''ChatGPT*''')) {
             throw "StartApps display-name fallback must fail closed"
           }
-          if (-not $win.Contains("$families.Count -ne 1")) { throw "ambiguous launch-family fail-closed guard is missing" }
+          if (-not $win.Contains('$families.Count -ne 1')) { throw "ambiguous launch-family fail-closed guard is missing" }
           if (-not $main.Contains('d.Kind != "codex-web-gpt-launcher"')) { throw "exact launcher descriptor kind check is missing" }
-          if (-not $main.Contains("strings.TrimSpace(d.Endpoint) == \"\"")) { throw "empty launcher endpoint fail-closed guard is missing" }
-          if (-not $main.Contains("context.WithTimeout(context.Background(), 20*time.Second)")) { throw "route lifecycle timeout is missing" }
-          if (-not $main.Contains("CheckRedirect")) { throw "health probe redirect guard is missing" }
+          if (-not $main.Contains('strings.TrimSpace(d.Endpoint) == ""')) { throw "empty launcher endpoint fail-closed guard is missing" }
+          if (-not $main.Contains('context.WithTimeout(context.Background(), 20*time.Second)')) { throw "route lifecycle timeout is missing" }
+          if (-not $main.Contains('CheckRedirect')) { throw "health probe redirect guard is missing" }
 
       - name: Test
         working-directory: tools/codex-webgpt-guard/build
