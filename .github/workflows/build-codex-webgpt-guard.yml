@@ -38,9 +38,19 @@ jobs:
           Expand-Archive -Path "tools/codex-webgpt-guard/source.zip" -DestinationPath $build -Force
 
       - name: Apply audited hardening
-        working-directory: tools/codex-webgpt-guard/build
         shell: bash
-        run: git apply -p2 ../hardening-v2.patch
+        run: git apply --directory=tools/codex-webgpt-guard/build -p2 tools/codex-webgpt-guard/hardening-v2.patch
+
+      - name: Verify hardening landed in build source
+        shell: pwsh
+        run: |
+          $src = Get-Content -Raw "tools/codex-webgpt-guard/build/platform_windows.go"
+          if (-not $src.Contains("freshCodexRecoveryScript")) { throw "hardening patch did not reach build source" }
+          if ($src.Contains("Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | Stop-Process -Force")) {
+            throw "unsafe broad process termination is still present"
+          }
+          $main = Get-Content -Raw "tools/codex-webgpt-guard/build/main.go"
+          if (-not $main.Contains('d.Kind != "codex-web-gpt-launcher"')) { throw "launcher descriptor hardening is missing" }
 
       - name: Test
         working-directory: tools/codex-webgpt-guard/build
