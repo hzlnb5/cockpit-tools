@@ -169,14 +169,6 @@ diff --git a/old/platform_windows.go b/source/platform_windows.go
 index 5cff9bf..a4c6b1c 100644
 --- a/old/platform_windows.go
 +++ b/source/platform_windows.go
-@@ -3,6 +3,7 @@
- package main
- 
- import (
-+	"context"
- 	"fmt"
- 	"os"
- 	"os/exec"
 @@ -147,7 +148,6 @@ function Get-Family($p) {
    }
    if($path -match '\\OpenAI\.Codex_'){ return 'codex' }
@@ -215,17 +207,6 @@ index 5cff9bf..a4c6b1c 100644
 +Start-Sleep -Milliseconds 250
  Start-Process -FilePath ('shell:AppsFolder\\'+$entry.AppID) -ErrorAction Stop | Out-Null
  exit 0`, writeMs)
- }
-@@ -188,7 +192,9 @@ func recoverFreshCodexLaunch(configWriteUnixNano int64) bool {
- 	if age < 0 || age > 5*time.Second {
- 		return false
- 	}
--	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", freshCodexRecoveryScript(configWriteUnixNano))
-+	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
-+	defer cancel()
-+	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", freshCodexRecoveryScript(configWriteUnixNano))
- 	prepareHiddenCommand(cmd)
- 	return cmd.Run() == nil
  }
 diff --git a/old/platform_windows_test.go b/source/platform_windows_test.go
 index 70558db..0ac23f7 100644
