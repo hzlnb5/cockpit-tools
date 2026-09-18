@@ -1,0 +1,13 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": false
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/hzlnb5/cockpit-tools/releases/latest/download/latest-{{target}}.json",
+        "https://github.com/hzlnb5/cockpit-tools/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}
