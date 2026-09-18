@@ -1,0 +1,56 @@
+name: Self-use Windows build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: self-use-windows
+
+      - name: Go setup
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: sidecars/cockpit-cliproxy/go.mod
+          cache-dependency-path: sidecars/cockpit-cliproxy/go.sum
+
+      - name: Node.js setup
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build unsigned Windows app
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITE_COCKPIT_SELF_USE_BUILD: "1"
+        run: |
+          set -euo pipefail
+          npx tauri build --ci --config src-tauri/tauri.selfuse.conf.json
+
+      - name: Upload Windows installer bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: cockpit-tools-webgpt-windows
+          retention-days: 30
+          if-no-files-found: error
+          path: target/release/bundle

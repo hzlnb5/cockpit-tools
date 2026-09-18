@@ -1149,6 +1149,102 @@ requires_openai_auth = false
     }
 
     #[test]
+    fn oauth_account_switch_preserves_external_openai_base_url() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _env = TestEnvGuard::new("codex-core-oauth-external-route-preserve-test");
+        let base_dir = make_temp_dir("codex-core-oauth-external-route-preserve-profile");
+        let config_path = base_dir.join("config.toml");
+        fs::write(
+            &config_path,
+            "openai_base_url = \"http://127.0.0.1:17841/v1\"\n",
+        )
+        .expect("seed external route");
+
+        let first = CodexAccount::new(
+            "core-oauth-route-a".to_string(),
+            "core-route-a@example.com".to_string(),
+            make_codex_tokens(
+                "core-route-a@example.com",
+                "acc-core-route-a",
+                "org-core-route-a",
+                "core-route-a",
+                "rt-core-route-a",
+            ),
+        );
+        let second = CodexAccount::new(
+            "core-oauth-route-b".to_string(),
+            "core-route-b@example.com".to_string(),
+            make_codex_tokens(
+                "core-route-b@example.com",
+                "acc-core-route-b",
+                "org-core-route-b",
+                "core-route-b",
+                "rt-core-route-b",
+            ),
+        );
+        save_account(&first).expect("save first oauth account");
+        save_account(&second).expect("save second oauth account");
+
+        write_account_bundle_to_dir(&base_dir, &first).expect("project first oauth account");
+        let after_first = fs::read_to_string(&config_path).expect("read first config");
+        assert!(after_first.contains(
+            "openai_base_url = \"http://127.0.0.1:17841/v1\""
+        ));
+
+        write_account_bundle_to_dir(&base_dir, &second).expect("switch to second oauth account");
+        let after_second = fs::read_to_string(&config_path).expect("read second config");
+        assert!(
+            after_second.contains("openai_base_url = \"http://127.0.0.1:17841/v1\""),
+            "OAuth-to-OAuth switch must preserve external route: {after_second}"
+        );
+
+        fs::remove_dir_all(&base_dir).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn switching_from_cockpit_api_route_to_oauth_cleans_cockpit_route() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _env = TestEnvGuard::new("codex-core-owned-route-cleanup-test");
+        let base_dir = make_temp_dir("codex-core-owned-route-cleanup-profile");
+
+        let api_account = CodexAccount::new_api_key(
+            "core-owned-relay".to_string(),
+            "core-owned-relay@example.com".to_string(),
+            "sk-core-owned-relay".to_string(),
+            CodexApiProviderMode::Custom,
+            Some("https://core-owned-relay.example.com/v1".to_string()),
+            Some("core_owned_relay".to_string()),
+            Some("Core Owned Relay".to_string()),
+        );
+        save_account(&api_account).expect("save api account");
+        write_account_bundle_to_dir(&base_dir, &api_account).expect("project api account");
+
+        let oauth = CodexAccount::new(
+            "core-oauth-after-owned-route".to_string(),
+            "core-oauth-after-owned@example.com".to_string(),
+            make_codex_tokens(
+                "core-oauth-after-owned@example.com",
+                "acc-core-after-owned",
+                "org-core-after-owned",
+                "core-oauth-after-owned",
+                "rt-core-after-owned",
+            ),
+        );
+        save_account(&oauth).expect("save oauth account");
+        write_account_bundle_to_dir(&base_dir, &oauth).expect("switch to oauth");
+
+        let content =
+            fs::read_to_string(base_dir.join("config.toml")).expect("read cleaned config");
+        assert!(
+            !content.contains("core-owned-relay.example.com"),
+            "Cockpit-owned base URL must be removed: {content}"
+        );
+        assert!(!content.contains("openai_base_url"));
+
+        fs::remove_dir_all(&base_dir).expect("cleanup temp dir");
+    }
+
+    #[test]
     fn api_key_account_switch_updates_relay_key_and_base_url_together() {
         let base_dir = make_temp_dir("codex-api-key-relay-switch-test");
         let mut first = CodexAccount::new_api_key(

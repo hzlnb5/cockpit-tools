@@ -804,6 +804,117 @@ multi_agent = true
     }
 
     #[test]
+    fn oauth_account_switch_preserves_external_openai_base_url() {
+        let _lock = crate::modules::test_support::env_lock()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _env = TestEnvGuard::new("codex-oauth-external-route-preserve-test");
+        let base_dir = make_temp_dir("codex-oauth-external-route-preserve-profile");
+        let config_path = base_dir.join("config.toml");
+        fs::write(
+            &config_path,
+            "model_provider = \"openai\"\nopenai_base_url = \"http://127.0.0.1:17841/v1\"\n",
+        )
+        .expect("seed external route");
+
+        let first = CodexAccount::new(
+            "oauth-route-a".to_string(),
+            "route-a@example.com".to_string(),
+            make_codex_tokens(
+                "route-a@example.com",
+                "acc-route-a",
+                "org-route-a",
+                "route-a",
+                "rt-route-a",
+            ),
+        );
+        let second = CodexAccount::new(
+            "oauth-route-b".to_string(),
+            "route-b@example.com".to_string(),
+            make_codex_tokens(
+                "route-b@example.com",
+                "acc-route-b",
+                "org-route-b",
+                "route-b",
+                "rt-route-b",
+            ),
+        );
+        save_account(&first).expect("save first oauth account");
+        save_account(&second).expect("save second oauth account");
+
+        write_account_bundle_to_dir(&base_dir, &first).expect("project first oauth account");
+        let after_first = fs::read_to_string(&config_path).expect("read first config");
+        assert!(
+            after_first.contains("openai_base_url = \"http://127.0.0.1:17841/v1\""),
+            "first OAuth projection must preserve external route: {after_first}"
+        );
+
+        write_account_bundle_to_dir(&base_dir, &second).expect("switch to second oauth account");
+        let after_second = fs::read_to_string(&config_path).expect("read second config");
+        assert!(
+            after_second.contains("openai_base_url = \"http://127.0.0.1:17841/v1\""),
+            "OAuth-to-OAuth switch must preserve external route: {after_second}"
+        );
+        #[cfg(target_os = "windows")]
+        assert!(after_second.contains("model_provider = \"openai\""));
+
+        fs::remove_dir_all(&base_dir).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn switching_from_cockpit_api_provider_to_oauth_cleans_cockpit_route() {
+        let _lock = crate::modules::test_support::env_lock()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _env = TestEnvGuard::new("codex-owned-route-cleanup-test");
+        let base_dir = make_temp_dir("codex-owned-route-cleanup-profile");
+
+        let mut api_account = CodexAccount::new_api_key(
+            "owned-relay".to_string(),
+            "owned-relay@example.com".to_string(),
+            "sk-owned-relay".to_string(),
+            CodexApiProviderMode::Custom,
+            Some("https://owned-relay.example.com/v1".to_string()),
+            Some("owned_relay".to_string()),
+            Some("Owned Relay".to_string()),
+            Vec::new(),
+        );
+        api_account.api_wire_api = Some("responses".to_string());
+        save_account(&api_account).expect("save api account");
+        write_account_bundle_to_dir(&base_dir, &api_account).expect("project api account");
+
+        let oauth = CodexAccount::new(
+            "oauth-after-owned-route".to_string(),
+            "oauth-after-owned@example.com".to_string(),
+            make_codex_tokens(
+                "oauth-after-owned@example.com",
+                "acc-after-owned",
+                "org-after-owned",
+                "oauth-after-owned",
+                "rt-after-owned",
+            ),
+        );
+        save_account(&oauth).expect("save oauth account");
+        write_account_bundle_to_dir(&base_dir, &oauth).expect("switch to oauth");
+
+        let content =
+            fs::read_to_string(base_dir.join("config.toml")).expect("read cleaned config");
+        assert!(
+            !content.contains("owned-relay.example.com"),
+            "Cockpit-owned provider route must be removed: {content}"
+        );
+        assert!(
+            !content.contains("openai_base_url"),
+            "Cockpit-owned base URL must not be preserved as external: {content}"
+        );
+        assert!(!content.contains("[model_providers.codex_local_access]"));
+        #[cfg(target_os = "windows")]
+        assert!(content.contains("model_provider = \"openai\""));
+
+        fs::remove_dir_all(&base_dir).expect("cleanup temp dir");
+    }
+
+    #[test]
     fn editing_current_api_key_account_rewrites_relay_key_and_base_url() {
         let _lock = crate::modules::test_support::env_lock()
             .lock()
