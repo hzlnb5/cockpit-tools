@@ -10,21 +10,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  windows-route-tests:
+  core-route-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: route-core
+
+      - name: Preserve external route
+        run: cargo test --package cockpit-core oauth_account_switch_preserves_external_openai_base_url -- --test-threads=1
+
+      - name: Clean Cockpit-owned route
+        run: cargo test --package cockpit-core switching_from_cockpit_api_route_to_oauth_cleans_cockpit_route -- --test-threads=1
+
+  windows-compile:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
-
-      - name: Core Rust tests
-        run: cargo test --package cockpit-core -- --test-threads=1
+        with:
+          key: route-windows
 
       - name: Check Windows Tauri library
         run: cargo check --package cockpit-tools --lib
