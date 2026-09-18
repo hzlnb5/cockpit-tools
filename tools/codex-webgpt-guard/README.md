@@ -14,13 +14,15 @@ Default mode is `auto`:
 - When Web GPT comes back, it uses the official **`route connect` lifecycle** to reconnect it.
 - It removes only known Cockpit-managed model catalog references when Web mode is active and those references would replace the Web GPT model catalog.
 - It refuses to overwrite an unknown custom provider, unknown model catalog, or another custom `openai_base_url`.
+- If Cockpit wins the launch race by a few milliseconds, it only reloads a **freshly started** ChatGPT/Codex process after repairing the route, so the model catalog is read from the corrected configuration. Existing long-running Codex sessions are not restarted.
+- Re-running `install` safely replaces an older Guard build even when the old background process is still exiting.
 
 So your normal workflow is simply:
 
 - Want Web GPT: open Codex Web GPT, then choose an account in Cockpit and press the launch button.
 - Want native Codex: close Codex Web GPT, then choose an account in Cockpit and press the launch button.
 
-No Cockpit source patch is required for the Guard itself.
+No Cockpit source patch is required for the Guard itself. Ordinary Cockpit updates therefore do not overwrite the Guard.
 
 ## Install
 
