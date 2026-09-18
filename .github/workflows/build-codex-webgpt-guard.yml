@@ -120,6 +120,52 @@ jobs:
           .\dist\codex-webgpt-guard.exe help
           .\dist\codex-webgpt-guard.exe status
 
+      - name: Install, self-update, and uninstall smoke test
+        working-directory: tools/codex-webgpt-guard/build
+        shell: pwsh
+        run: |
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP "GuardLocal"
+          $env:CODEX_CHATGPT_WEB_HOME = Join-Path $env:RUNNER_TEMP "GuardWebHome"
+          $env:CODEX_HOME = Join-Path $env:RUNNER_TEMP "GuardCodexHome"
+          New-Item -ItemType Directory -Force $env:LOCALAPPDATA,$env:CODEX_CHATGPT_WEB_HOME,$env:CODEX_HOME | Out-Null
+
+          $exe = (Resolve-Path ".\dist\codex-webgpt-guard.exe").Path
+          & $exe install
+          if ($LASTEXITCODE -ne 0) { throw "first install failed" }
+
+          $installed = Join-Path $env:LOCALAPPDATA "CodexWebGPTGuard\codex-webgpt-guard.exe"
+          if (-not (Test-Path $installed)) { throw "installed executable is missing" }
+
+          $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+          $runValue = (Get-ItemProperty -Path $runKey -Name CodexWebGPTGuard -ErrorAction Stop).CodexWebGPTGuard
+          if (-not $runValue -or -not $runValue.Contains("codex-webgpt-guard.exe")) {
+            throw "HKCU startup registration is missing"
+          }
+
+          Start-Sleep -Milliseconds 600
+          & $exe install
+          if ($LASTEXITCODE -ne 0) { throw "second install/self-update path failed" }
+
+          & $exe status
+          if ($LASTEXITCODE -ne 0) { throw "status failed after self-update" }
+
+          & $exe uninstall
+          if ($LASTEXITCODE -ne 0) { throw "uninstall failed" }
+
+          Start-Sleep -Seconds 1
+          $runValueAfter = (Get-ItemProperty -Path $runKey -Name CodexWebGPTGuard -ErrorAction SilentlyContinue).CodexWebGPTGuard
+          if ($runValueAfter) { throw "HKCU startup registration remained after uninstall" }
+
+          $deadline = (Get-Date).AddSeconds(5)
+          do {
+            $alive = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+              $_.ExecutablePath -and $_.ExecutablePath.Equals($installed, [System.StringComparison]::OrdinalIgnoreCase)
+            })
+            if ($alive.Count -eq 0) { break }
+            Start-Sleep -Milliseconds 200
+          } while ((Get-Date) -lt $deadline)
+          if ($alive.Count -ne 0) { throw "background Guard process did not exit after uninstall" }
+
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
