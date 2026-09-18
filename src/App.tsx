@@ -1511,6 +1511,11 @@ function MainApp() {
   }, [updateRuntimeInfo]);
 
   const runUpdaterCheck = useCallback(async () => {
+    // Self-use fork builds follow upstream through GitHub sync + CI artifacts.
+    // Never let the official in-app updater replace the compatibility build.
+    if (import.meta.env.VITE_COCKPIT_SELF_USE_BUILD === '1') {
+      return null;
+    }
     const { check } = await import('@tauri-apps/plugin-updater');
     const target = getUpdaterCheckTarget();
     return target ? check({ target }) : check();
