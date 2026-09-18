@@ -37,9 +37,14 @@ jobs:
           New-Item -ItemType Directory -Force -Path $build | Out-Null
           Expand-Archive -Path "tools/codex-webgpt-guard/source.zip" -DestinationPath $build -Force
 
+      - name: Apply audited hardening
+        working-directory: tools/codex-webgpt-guard/build
+        shell: bash
+        run: git apply -p2 ../hardening-v2.patch
+
       - name: Test
         working-directory: tools/codex-webgpt-guard/build
-        run: go test ./...
+        run: go test ./... -count=1
 
       - name: Vet
         working-directory: tools/codex-webgpt-guard/build
@@ -56,6 +61,12 @@ jobs:
           @echo off
           cd /d "%~dp0"
           codex-webgpt-guard.exe install
+          if errorlevel 1 (
+            echo.
+            echo Installation failed. See the error above.
+            pause
+            exit /b 1
+          )
           echo.
           echo Installation finished. You can keep using Cockpit normally.
           pause
@@ -70,6 +81,12 @@ jobs:
           @echo off
           cd /d "%~dp0"
           codex-webgpt-guard.exe uninstall
+          if errorlevel 1 (
+            echo.
+            echo Uninstall failed. See the error above.
+            pause
+            exit /b 1
+          )
           pause
           "@ | Set-Content -Encoding ascii dist/UNINSTALL.cmd
           $hash = (Get-FileHash -Algorithm SHA256 dist/codex-webgpt-guard.exe).Hash.ToLowerInvariant()
