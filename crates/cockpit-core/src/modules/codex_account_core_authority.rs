@@ -596,6 +596,45 @@ fn read_managed_projection_from_dir(base_dir: &Path) -> Option<CodexManagedAuthP
     }
 }
 
+/// Preserve a user/external Responses route while Cockpit only changes OAuth credentials.
+///
+/// A previous Cockpit API/agent projection owns its route and must be cleaned. With no Cockpit
+/// projection, an existing built-in OpenAI `openai_base_url` is treated as user-owned.
+fn external_openai_base_url_for_oauth_projection(
+    base_dir: &Path,
+    account: &CodexAccount,
+) -> Option<String> {
+    if account.is_api_key_auth() || account.is_agent_identity_auth() {
+        return None;
+    }
+
+    if let Some(projection) = read_managed_projection_from_dir(base_dir) {
+        let previous = load_account(&projection.account_id)?;
+        if previous.is_api_key_auth() || previous.is_agent_identity_auth() {
+            return None;
+        }
+    }
+
+    let config_path = get_config_toml_path(base_dir);
+    let content = fs::read_to_string(config_path).ok()?;
+    let doc = content.parse::<toml_edit::Document>().ok()?;
+
+    if let Some(provider_id) = normalize_optional_ref(
+        doc.get(CODEX_CONFIG_MODEL_PROVIDER_KEY)
+            .and_then(|item| item.as_str()),
+    ) {
+        if provider_id != CODEX_OPENAI_PROVIDER_ID {
+            return None;
+        }
+    }
+
+    normalize_api_base_url(
+        doc.get(CODEX_CONFIG_OPENAI_BASE_URL_KEY)
+            .and_then(|item| item.as_str()),
+    )
+    .filter(|base_url| !is_default_openai_base_url(base_url))
+}
+
 fn ensure_directory_writable_for_import(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|e| format_io_error("创建导入目录", path, &e))?;
     let probe_path = build_temp_file_path(path, path, "import-probe");
@@ -654,13 +693,21 @@ pub fn write_auth_file_to_dir(base_dir: &Path, account: &CodexAccount) -> Result
         write_api_key_provider_to_config_toml(base_dir, &provider_config)?;
         provider_config
     } else {
+        let preserved_external_base_url =
+            external_openai_base_url_for_oauth_projection(base_dir, account);
         let provider_config = ApiProviderConfig {
             mode: CodexApiProviderMode::OpenaiBuiltin,
-            base_url: None,
+            base_url: preserved_external_base_url.clone(),
             provider_id: None,
             provider_name: None,
         };
         write_api_provider_to_config_toml(base_dir, &provider_config)?;
+        if let Some(base_url) = preserved_external_base_url.as_deref() {
+            logger::log_info(&format!(
+                "[Codex切号] 保留外部 openai_base_url: target_account_id={}, base_url={}",
+                account.id, base_url
+            ));
+        }
         provider_config
     };
 
