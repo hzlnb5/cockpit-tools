@@ -37,22 +37,24 @@ jobs:
           New-Item -ItemType Directory -Force -Path $build | Out-Null
           Expand-Archive -Path "tools/codex-webgpt-guard/source.zip" -DestinationPath $build -Force
 
-      - name: Apply audited hardening
-        shell: bash
-        run: |
-          tr -d '\r' < tools/codex-webgpt-guard/hardening-v2.patch > "$RUNNER_TEMP/hardening-v2.patch"
-          git apply --whitespace=nowarn --directory=tools/codex-webgpt-guard/build -p2 "$RUNNER_TEMP/hardening-v2.patch"
-
-      - name: Verify hardening landed in build source
+      - name: Verify canonical hardened source
         shell: pwsh
         run: |
-          $src = Get-Content -Raw "tools/codex-webgpt-guard/build/platform_windows.go"
-          if (-not $src.Contains("freshCodexRecoveryScript")) { throw "hardening patch did not reach build source" }
-          if ($src.Contains("Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | Stop-Process -Force")) {
-            throw "unsafe broad process termination is still present"
-          }
+          $win = Get-Content -Raw "tools/codex-webgpt-guard/build/platform_windows.go"
           $main = Get-Content -Raw "tools/codex-webgpt-guard/build/main.go"
-          if (-not $main.Contains('d.Kind != "codex-web-gpt-launcher"')) { throw "launcher descriptor hardening is missing" }
+          if (-not $win.Contains("freshCodexRecoveryScript")) { throw "fresh launch recovery guard is missing" }
+          if ($win.Contains("Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | Stop-Process -Force")) {
+            throw "unsafe broad process termination is present"
+          }
+          if ($win.Contains("if($p.ProcessName -eq 'Codex')")) { throw "process-name fallback must fail closed" }
+          if ($win.Contains("Name -like 'Codex*'") -or $win.Contains("Name -like 'ChatGPT*'")) {
+            throw "StartApps display-name fallback must fail closed"
+          }
+          if (-not $win.Contains("$families.Count -ne 1")) { throw "ambiguous launch-family fail-closed guard is missing" }
+          if (-not $main.Contains('d.Kind != "codex-web-gpt-launcher"')) { throw "exact launcher descriptor kind check is missing" }
+          if (-not $main.Contains("strings.TrimSpace(d.Endpoint) == \"\"")) { throw "empty launcher endpoint fail-closed guard is missing" }
+          if (-not $main.Contains("context.WithTimeout(context.Background(), 20*time.Second)")) { throw "route lifecycle timeout is missing" }
+          if (-not $main.Contains("CheckRedirect")) { throw "health probe redirect guard is missing" }
 
       - name: Test
         working-directory: tools/codex-webgpt-guard/build
