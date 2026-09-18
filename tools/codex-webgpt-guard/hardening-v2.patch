@@ -88,7 +88,7 @@ index 7812673..5cff9bf 100644
  	"fmt"
  	"os"
  	"os/exec"
-@@ -134,11 +135,55 @@ func regDeleteRun(name string) error {
+@@ -134,11 +135,53 @@ func regDeleteRun(name string) error {
  	return nil
  }
  
@@ -146,7 +146,7 @@ index 7812673..5cff9bf 100644
  	if configWriteUnixNano == 0 {
  		return false
  	}
-@@ -146,22 +188,7 @@ func recoverFreshCodexLaunch(configWriteUnixNano int64) bool {
+@@ -146,22 +189,9 @@ func recoverFreshCodexLaunch(configWriteUnixNano int64) bool {
  	if age < 0 || age > 5*time.Second {
  		return false
  	}
