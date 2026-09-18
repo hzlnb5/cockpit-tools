@@ -287,7 +287,7 @@ diff --git a/old/main.go b/source/main.go
 index d41cb0f..b1e0c11 100644
 --- a/old/main.go
 +++ b/source/main.go
-@@ -359,12 +359,15 @@ func runDaemon() error {
+@@ -359,10 +359,13 @@ func runDaemon() error {
  			desiredWeb := s.Mode == "web" || (s.Mode == "auto" && state.Presence)
  			desiredNative := s.Mode == "native" || (s.Mode == "auto" && !state.Presence && !absentSince.IsZero() && now.Sub(absentSince) >= nativeGrace)
  			if desiredWeb && !state.Journal.Active {
