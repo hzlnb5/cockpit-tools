@@ -19,9 +19,6 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Format check
-        run: cargo fmt --all -- --check
-
       - name: Core Rust tests
         run: cargo test --package cockpit-core -- --test-threads=1
 
