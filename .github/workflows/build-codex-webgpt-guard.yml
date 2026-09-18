@@ -37,9 +37,26 @@ jobs:
           New-Item -ItemType Directory -Force -Path $build | Out-Null
           Expand-Archive -Path "tools/codex-webgpt-guard/source.zip" -DestinationPath $build -Force
 
+      - name: Apply audited hardening
+        shell: bash
+        run: |
+          tr -d '\r' < tools/codex-webgpt-guard/hardening-v2.patch > "$RUNNER_TEMP/hardening-v2.patch"
+          git apply --whitespace=nowarn --directory=tools/codex-webgpt-guard/build -p2 "$RUNNER_TEMP/hardening-v2.patch"
+
+      - name: Verify hardening landed in build source
+        shell: pwsh
+        run: |
+          $src = Get-Content -Raw "tools/codex-webgpt-guard/build/platform_windows.go"
+          if (-not $src.Contains("freshCodexRecoveryScript")) { throw "hardening patch did not reach build source" }
+          if ($src.Contains("Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | Stop-Process -Force")) {
+            throw "unsafe broad process termination is still present"
+          }
+          $main = Get-Content -Raw "tools/codex-webgpt-guard/build/main.go"
+          if (-not $main.Contains('d.Kind != "codex-web-gpt-launcher"')) { throw "launcher descriptor hardening is missing" }
+
       - name: Test
         working-directory: tools/codex-webgpt-guard/build
-        run: go test ./...
+        run: go test ./... -count=1
 
       - name: Vet
         working-directory: tools/codex-webgpt-guard/build
@@ -56,6 +73,12 @@ jobs:
           @echo off
           cd /d "%~dp0"
           codex-webgpt-guard.exe install
+          if errorlevel 1 (
+            echo.
+            echo Installation failed. See the error above.
+            pause
+            exit /b 1
+          )
           echo.
           echo Installation finished. You can keep using Cockpit normally.
           pause
@@ -70,6 +93,12 @@ jobs:
           @echo off
           cd /d "%~dp0"
           codex-webgpt-guard.exe uninstall
+          if errorlevel 1 (
+            echo.
+            echo Uninstall failed. See the error above.
+            pause
+            exit /b 1
+          )
           pause
           "@ | Set-Content -Encoding ascii dist/UNINSTALL.cmd
           $hash = (Get-FileHash -Algorithm SHA256 dist/codex-webgpt-guard.exe).Hash.ToLowerInvariant()

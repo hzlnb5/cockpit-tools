@@ -1,0 +1,284 @@
+diff --git a/old/README.md b/source/README.md
+index f012487..7846e46 100644
+--- a/old/README.md
++++ b/source/README.md
+@@ -14,6 +14,7 @@ Default mode is `auto`:
+ - When Web GPT comes back, it uses the official **`route connect` lifecycle** to reconnect it.
+ - It removes only known Cockpit-managed model catalog references when Web mode is active and those references would replace the Web GPT model catalog.
+ - It refuses to overwrite an unknown custom provider, unknown model catalog, or another custom `openai_base_url`.
++- Its launch-race fallback only reloads a freshly-started matching ChatGPT/Codex package family; it never intentionally terminates an older session.
+ 
+ So your normal workflow is simply:
+ 
+@@ -82,3 +83,8 @@ Logs are written to:
+ ```text
+ %LOCALAPPDATA%\CodexWebGPTGuard\guard.log
+ ```
++
++
++## Windows trust notice
++
++The CI-built executable is reproducible from the source in this repository but is **not Authenticode-signed**. Windows SmartScreen may therefore show an Unknown publisher warning. The package includes `SHA256SUMS.txt` so the binary can be verified before installation.
+diff --git a/old/main.go b/source/main.go
+index d41cb0f..cf02802 100644
+--- a/old/main.go
++++ b/source/main.go
+@@ -641,10 +641,7 @@ func launcherLive(path string) bool {
+ 		return false
+ 	}
+ 	var d launcherDescriptor
+-	if json.Unmarshal(b, &d) != nil || d.PID <= 0 {
+-		return false
+-	}
+-	if d.Kind != "" && !strings.Contains(strings.ToLower(d.Kind), "codex-web-gpt") {
++	if json.Unmarshal(b, &d) != nil || d.PID <= 0 || d.Version < 3 || d.Kind != "codex-web-gpt-launcher" {
+ 		return false
+ 	}
+ 	if !processAlive(d.PID) {
+@@ -654,8 +651,12 @@ func launcherLive(path string) bool {
+ 		return true
+ 	}
+ 	u, err := url.Parse(d.Endpoint)
+-	if err != nil || u.Host == "" {
+-		return true
++	if err != nil || u.Scheme != "http" || u.Port() == "" {
++		return false
++	}
++	host := strings.Trim(strings.ToLower(u.Hostname()), "[]")
++	if host != "127.0.0.1" && host != "localhost" && host != "::1" {
++		return false
+ 	}
+ 	conn, err := net.DialTimeout("tcp", u.Host, 120*time.Millisecond)
+ 	if err != nil {
+diff --git a/old/main_test.go b/source/main_test.go
+index a6c41b2..d0f78cb 100644
+--- a/old/main_test.go
++++ b/source/main_test.go
+@@ -359,3 +359,21 @@ func TestWebModeUsesOfficialRouteConnect(t *testing.T) {
+ 		t.Fatal("official route connect did not mark the journal active")
+ 	}
+ }
++
++func TestLauncherDescriptorRejectsWrongKindWithoutDialing(t *testing.T) {
++	root := t.TempDir()
++	path := filepath.Join(root, "launcher-browser.json")
++	d := launcherDescriptor{
++		Version:  3,
++		Kind:     "other-launcher",
++		PID:      os.Getpid(),
++		Endpoint: "http://example.com:80",
++	}
++	b, _ := json.Marshal(d)
++	if err := os.WriteFile(path, b, 0600); err != nil {
++		t.Fatal(err)
++	}
++	if launcherLive(path) {
++		t.Fatal("foreign launcher descriptor must not be accepted")
++	}
++}
+diff --git a/old/platform_windows.go b/source/platform_windows.go
+index 7812673..5cff9bf 100644
+--- a/old/platform_windows.go
++++ b/source/platform_windows.go
+@@ -3,6 +3,7 @@
+ package main
+ 
+ import (
++	"context"
+ 	"fmt"
+ 	"os"
+ 	"os/exec"
+@@ -134,11 +135,53 @@ func regDeleteRun(name string) error {
+ 	return nil
+ }
+ 
++func freshCodexRecoveryScript(configWriteUnixNano int64) string {
++	writeMs := configWriteUnixNano / int64(time.Millisecond)
++	return fmt.Sprintf(`$ErrorActionPreference='SilentlyContinue'
++$writeMs=%d
++$nowMs=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
++function Get-Family($p) {
++  $path=$null
++  try { $path=$p.Path } catch {}
++  if(-not $path) {
++    try { $path=(Get-CimInstance Win32_Process -Filter ("ProcessId="+$p.Id)).ExecutablePath } catch {}
++  }
++  if($path -match '\\OpenAI\.Codex_'){ return 'codex' }
++  if($path -match '\\OpenAI\.ChatGPT_'){ return 'chatgpt' }
++  if($p.ProcessName -eq 'Codex'){ return 'codex' }
++  return $null
++}
++$fresh=@(Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | ForEach-Object {
++  try {
++    $startMs=[DateTimeOffset]::new($_.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds()
++    if($startMs -ge ($writeMs-750) -and $startMs -le ($nowMs+250) -and ($nowMs-$startMs) -le 4500) {
++      [PSCustomObject]@{ Process=$_; StartMs=$startMs; Family=(Get-Family $_) }
++    }
++  } catch {}
++} | Where-Object { $_.Family })
++if($fresh.Count -eq 0){ exit 3 }
++$anchor=$fresh | Sort-Object @{Expression={[math]::Abs($_.StartMs-$writeMs)}} | Select-Object -First 1
++$family=$anchor.Family
++$targets=@($fresh | Where-Object { $_.Family -eq $family })
++if($targets.Count -eq 0){ exit 6 }
++$entries=Get-StartApps
++if($family -eq 'codex') {
++  $entry=$entries | Where-Object { $_.AppID -like 'OpenAI.Codex_*' -or $_.Name -like 'Codex*' } | Select-Object -First 1
++} else {
++  $entry=$entries | Where-Object { $_.AppID -like 'OpenAI.ChatGPT*' -or $_.Name -like 'ChatGPT*' } | Select-Object -First 1
++}
++if(-not $entry){ exit 5 }
++$targets | ForEach-Object { Stop-Process -Id $_.Process.Id -Force -ErrorAction SilentlyContinue }
++Start-Sleep -Milliseconds 250
++Start-Process -FilePath ('shell:AppsFolder\\'+$entry.AppID) -ErrorAction Stop | Out-Null
++exit 0`, writeMs)
++}
++
+ func recoverFreshCodexLaunch(configWriteUnixNano int64) bool {
+-	// Cockpit writes config.toml immediately before launching the Windows Store app. The Guard
+-	// normally wins that race because it polls every 15 ms while Web mode is desired. If Codex
+-	// nevertheless started first, only reload a process that is demonstrably fresh; never touch a
+-	// long-running user session.
++	// Cockpit writes config.toml immediately before launching the Store client. Only reload the
++	// just-created app family that correlates with this config write. Never terminate an older
++	// ChatGPT/Codex session and never guess between ChatGPT and Codex when package identity cannot
++	// be resolved safely.
+ 	if configWriteUnixNano == 0 {
+ 		return false
+ 	}
+@@ -146,22 +189,9 @@ func recoverFreshCodexLaunch(configWriteUnixNano int64) bool {
+ 	if age < 0 || age > 5*time.Second {
+ 		return false
+ 	}
+-	const script = `$ErrorActionPreference='SilentlyContinue'
+-$now=Get-Date
+-$p=Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | Sort-Object StartTime -Descending | Select-Object -First 1
+-if(-not $p){ exit 3 }
+-$age=($now-$p.StartTime).TotalSeconds
+-if($age -gt 4.5 -or $age -lt -1){ exit 4 }
+-Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+-Start-Sleep -Milliseconds 250
+-$entry=Get-StartApps | Where-Object {
+-  $_.AppID -like 'OpenAI.ChatGPT*' -or $_.AppID -like 'OpenAI.Codex_*' -or
+-  $_.Name -like 'ChatGPT*' -or $_.Name -like 'Codex*'
+-} | Sort-Object @{Expression={if($_.AppID -like 'OpenAI.ChatGPT*' -or $_.Name -like 'ChatGPT*'){0}else{1}}},Name | Select-Object -First 1
+-if(-not $entry){ exit 5 }
+-Start-Process -FilePath ('shell:AppsFolder\\'+$entry.AppID) -ErrorAction Stop | Out-Null
+-exit 0`
+-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script)
++	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
++	defer cancel()
++	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", freshCodexRecoveryScript(configWriteUnixNano))
+ 	prepareHiddenCommand(cmd)
+ 	return cmd.Run() == nil
+ }
+diff --git a/source/platform_windows_test.go b/source/platform_windows_test.go
+new file mode 100644
+index 0000000..70558db
+--- /dev/null
++++ b/source/platform_windows_test.go
+@@ -0,0 +1,104 @@
++//go:build windows
++
++package main
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++)
++
++func TestFreshRecoveryScriptOnlyStopsFreshMatchingFamily(t *testing.T) {
++	script := freshCodexRecoveryScript(time.Now().UnixNano())
++	for _, required := range []string{
++		"$writeMs=",
++		"Get-Family",
++		"$targets=@($fresh | Where-Object { $_.Family -eq $family })",
++		"Stop-Process -Id $_.Process.Id",
++		"OpenAI.Codex_*",
++		"OpenAI.ChatGPT*",
++	} {
++		if !strings.Contains(script, required) {
++			t.Fatalf("recovery script lost safety guard %q", required)
++		}
++	}
++	if strings.Contains(script, "Get-Process ChatGPT,Codex -ErrorAction SilentlyContinue | Stop-Process") {
++		t.Fatal("recovery script must never terminate every ChatGPT/Codex process")
++	}
++}
++
++func TestDaemonRepairsCockpitRewriteWhileWebGPTIsLive(t *testing.T) {
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path == "/healthz" {
++			w.WriteHeader(http.StatusOK)
++			_, _ = w.Write([]byte("ok"))
++			return
++		}
++		http.NotFound(w, r)
++	}))
++	defer server.Close()
++
++	root := t.TempDir()
++	local := filepath.Join(root, "local")
++	web := filepath.Join(root, "web")
++	codex := filepath.Join(root, "codex")
++	t.Setenv("LOCALAPPDATA", local)
++	t.Setenv("CODEX_CHATGPT_WEB_HOME", web)
++	t.Setenv("CODEX_HOME", codex)
++
++	if err := os.MkdirAll(filepath.Join(web, "codex"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.MkdirAll(codex, 0700); err != nil {
++		t.Fatal(err)
++	}
++	configPath := filepath.Join(codex, "config.toml")
++	route := server.URL + "/v1"
++	if err := os.WriteFile(configPath, []byte("model_provider = \"openai\"\nopenai_base_url = \""+route+"\"\n"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	journal := integrationJournal{Version: 10, Active: true, ConfigPath: configPath}
++	journal.Installed.OpenAIBaseURL = route
++	jb, _ := json.Marshal(journal)
++	if err := os.WriteFile(filepath.Join(web, "codex", "integration-journal.json"), jb, 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := saveSettings(settings{Mode: "auto"}); err != nil {
++		t.Fatal(err)
++	}
++
++	done := make(chan error, 1)
++	go func() { done <- runDaemon() }()
++	defer func() {
++		_ = os.MkdirAll(filepath.Dir(stopPath()), 0700)
++		_ = os.WriteFile(stopPath(), []byte("stop"), 0600)
++		select {
++		case <-done:
++		case <-time.After(3 * time.Second):
++			t.Error("guard daemon did not stop")
++		}
++	}()
++
++	// Let the daemon observe the live Web GPT state, then emulate Cockpit's OAuth projection.
++	time.Sleep(500 * time.Millisecond)
++	if err := os.WriteFile(configPath, []byte("model_provider = \"openai\"\nmodel_catalog_json = \"cockpit-model-catalog.json\"\n"), 0600); err != nil {
++		t.Fatal(err)
++	}
++
++	deadline := time.Now().Add(2500 * time.Millisecond)
++	for time.Now().Before(deadline) {
++		b, _ := os.ReadFile(configPath)
++		text := string(b)
++		if strings.Contains(text, "openai_base_url = \""+route+"\"") && !strings.Contains(text, "model_catalog_json") {
++			return
++		}
++		time.Sleep(25 * time.Millisecond)
++	}
++	b, _ := os.ReadFile(configPath)
++	t.Fatalf("daemon did not repair Cockpit rewrite in time:\n%s", string(b))
++}
