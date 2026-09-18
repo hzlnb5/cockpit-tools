@@ -14,7 +14,7 @@ Default mode is `auto`:
 - When Web GPT comes back, it uses the official **`route connect` lifecycle** to reconnect it.
 - It removes only known Cockpit-managed model catalog references when Web mode is active and those references would replace the Web GPT model catalog.
 - It refuses to overwrite an unknown custom provider, unknown model catalog, or another custom `openai_base_url`.
-- Its launch-race fallback only reloads a freshly-started matching ChatGPT/Codex package family; it never intentionally terminates an older session.
+- Its launch-race fallback is fail-closed: it reloads only a freshly-started, package-identified, unambiguous ChatGPT/Codex family; it never intentionally terminates an older session.
 
 So your normal workflow is simply:
 
@@ -88,3 +88,8 @@ Logs are written to:
 ## Windows trust notice
 
 The CI-built executable is reproducible from the source in this repository but is **not Authenticode-signed**. Windows SmartScreen may therefore show an Unknown publisher warning. The package includes `SHA256SUMS.txt` so the binary can be verified before installation.
+
+
+## Reproducible source
+
+`source.zip` is the exact source tree tested and built by CI. There is no post-extraction patch layer, so the archived source, test input, and Windows binary source are the same revision.
